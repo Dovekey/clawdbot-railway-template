@@ -685,25 +685,56 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
     </div>
   </div>
 
+  <div class="card" style="border: 2px solid #374151;">
+    <h2>🩺 Health Check</h2>
+    <p class="muted">Check system health and automatically fix common issues like missing directories and permissions.</p>
+
+    <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem">
+      <button id="healthCheck" style="background:#1e40af; flex:1">Run Health Check</button>
+      <button id="fixAllIssues" style="background:#065f46; flex:1">Fix All Issues</button>
+    </div>
+    <div id="healthStatus" style="padding:0.75rem; background:#1f2937; border-radius:0.375rem; margin-bottom:0.5rem; display:none">
+      <div id="healthStatusText" style="font-weight:500"></div>
+      <div id="healthProgress" class="muted" style="font-size:0.9em; margin-top:0.25rem"></div>
+    </div>
+    <pre id="healthOut" style="white-space:pre-wrap; max-height:300px; overflow-y:auto"></pre>
+  </div>
+
   <div class="card">
     <h2>Debug console</h2>
     <p class="muted">Run a small allowlist of safe commands (no shell). Useful for debugging and recovery.</p>
 
-    <div style="display:flex; gap:0.5rem; align-items:center">
-      <select id="consoleCmd" style="flex: 1">
-        <option value="gateway.restart">gateway.restart (wrapper-managed)</option>
-        <option value="gateway.stop">gateway.stop (wrapper-managed)</option>
-        <option value="gateway.start">gateway.start (wrapper-managed)</option>
-        <option value="openclaw.status">openclaw status</option>
-        <option value="openclaw.health">openclaw health</option>
-        <option value="openclaw.doctor">openclaw doctor</option>
-        <option value="openclaw.logs.tail">openclaw logs --tail N</option>
-        <option value="openclaw.config.get">openclaw config get &lt;path&gt;</option>
-        <option value="openclaw.version">openclaw --version</option>
+    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap">
+      <select id="consoleCmd" style="flex: 2; min-width:200px">
+        <optgroup label="🔧 Gateway (wrapper-managed)">
+          <option value="gateway.restart">gateway.restart</option>
+          <option value="gateway.stop">gateway.stop</option>
+          <option value="gateway.start">gateway.start</option>
+        </optgroup>
+        <optgroup label="🔍 Diagnostics">
+          <option value="openclaw.doctor">openclaw doctor</option>
+          <option value="openclaw.doctor.fix">openclaw doctor --fix</option>
+          <option value="openclaw.status">openclaw status</option>
+          <option value="openclaw.health">openclaw health</option>
+          <option value="openclaw.logs.tail">openclaw logs --tail N</option>
+        </optgroup>
+        <optgroup label="🛡️ Security">
+          <option value="openclaw.security.audit">openclaw security audit</option>
+        </optgroup>
+        <optgroup label="⚙️ Configuration">
+          <option value="openclaw.config.get">openclaw config get &lt;path&gt;</option>
+          <option value="openclaw.version">openclaw --version</option>
+        </optgroup>
+        <optgroup label="🛠️ Wrapper Utilities">
+          <option value="wrapper.fix.dirs">Fix missing directories</option>
+          <option value="wrapper.fix.permissions">Fix directory permissions</option>
+          <option value="wrapper.env.check">Check environment</option>
+        </optgroup>
       </select>
-      <input id="consoleArg" placeholder="Optional arg (e.g. 200, gateway.port)" style="flex: 1" />
+      <input id="consoleArg" placeholder="Optional arg (e.g. 200, gateway.port, deep)" style="flex: 1; min-width:150px" />
       <button id="consoleRun" style="background:#0f172a">Run</button>
     </div>
+    <div id="consoleArgHint" class="muted" style="font-size:0.85em; margin-top:0.25rem"></div>
     <pre id="consoleOut" style="white-space:pre-wrap"></pre>
   </div>
 
@@ -1143,8 +1174,15 @@ const ALLOWED_CONSOLE_COMMANDS = new Set([
   "openclaw.status",
   "openclaw.health",
   "openclaw.doctor",
+  "openclaw.doctor.fix",
+  "openclaw.security.audit",
   "openclaw.logs.tail",
   "openclaw.config.get",
+
+  // Wrapper utilities for fixing common issues
+  "wrapper.fix.dirs",
+  "wrapper.fix.permissions",
+  "wrapper.env.check",
 ]);
 
 app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
@@ -1194,6 +1232,106 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
       const r = await runCmd(OPENCLAW_NODE, clawArgs(["doctor"]));
       return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
     }
+    if (cmd === "openclaw.doctor.fix") {
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["doctor", "--fix"]));
+      return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
+    }
+    if (cmd === "openclaw.security.audit") {
+      const depth = arg === "deep" ? "--deep" : "";
+      const args = depth ? ["security", "audit", depth] : ["security", "audit"];
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(args));
+      return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: redactSecrets(r.output) });
+    }
+
+    // Wrapper utility commands for fixing common issues
+    if (cmd === "wrapper.fix.dirs") {
+      let output = "=== Fixing directory structure ===\n\n";
+      const dirsToCreate = [
+        path.join(STATE_DIR, "credentials"),
+        path.join(STATE_DIR, "identity"),
+        path.join(STATE_DIR, "logs"),
+        path.join(STATE_DIR, "sessions"),
+        path.join(WORKSPACE_DIR),
+      ];
+      for (const dir of dirsToCreate) {
+        try {
+          fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+          output += `✓ Created/verified: ${dir}\n`;
+        } catch (err) {
+          output += `✗ Failed to create ${dir}: ${err.message}\n`;
+        }
+      }
+      output += "\n=== Directory fix complete ===\n";
+      return res.json({ ok: true, output });
+    }
+    if (cmd === "wrapper.fix.permissions") {
+      let output = "=== Fixing directory permissions ===\n\n";
+      const dirsToFix = [STATE_DIR, WORKSPACE_DIR];
+      for (const dir of dirsToFix) {
+        try {
+          if (fs.existsSync(dir)) {
+            fs.chmodSync(dir, 0o700);
+            output += `✓ Set ${dir} to 700\n`;
+          } else {
+            output += `⚠ Directory does not exist: ${dir}\n`;
+          }
+        } catch (err) {
+          output += `✗ Failed to chmod ${dir}: ${err.message}\n`;
+        }
+      }
+      // Also fix subdirectories
+      const subDirs = ["credentials", "identity", "logs", "sessions"];
+      for (const sub of subDirs) {
+        const subPath = path.join(STATE_DIR, sub);
+        try {
+          if (fs.existsSync(subPath)) {
+            fs.chmodSync(subPath, 0o700);
+            output += `✓ Set ${subPath} to 700\n`;
+          }
+        } catch (err) {
+          output += `✗ Failed to chmod ${subPath}: ${err.message}\n`;
+        }
+      }
+      output += "\n=== Permission fix complete ===\n";
+      return res.json({ ok: true, output });
+    }
+    if (cmd === "wrapper.env.check") {
+      let output = "=== Environment Check ===\n\n";
+      output += `STATE_DIR: ${STATE_DIR}\n`;
+      output += `WORKSPACE_DIR: ${WORKSPACE_DIR}\n`;
+      output += `OPENCLAW_ENTRY: ${process.env.OPENCLAW_ENTRY || "(default)"}\n`;
+      output += `OPENCLAW_NODE: ${OPENCLAW_NODE}\n`;
+      output += `INTERNAL_GATEWAY_PORT: ${process.env.INTERNAL_GATEWAY_PORT || "18789"}\n\n`;
+
+      // Check for deprecated env vars
+      const deprecated = ["CLAWDBOT_WORKSPACE_DIR", "CLAWDBOT_STATE_DIR", "CLAWDBOT_GATEWAY_TOKEN"];
+      const deprecatedFound = deprecated.filter((k) => process.env[k]);
+      if (deprecatedFound.length > 0) {
+        output += "⚠ Deprecated environment variables detected:\n";
+        for (const k of deprecatedFound) {
+          output += `  - ${k} (use OPENCLAW_${k.replace("CLAWDBOT_", "")} instead)\n`;
+        }
+        output += "\n";
+      } else {
+        output += "✓ No deprecated environment variables detected.\n\n";
+      }
+
+      // Check directory existence and permissions
+      output += "Directory status:\n";
+      for (const dir of [STATE_DIR, WORKSPACE_DIR]) {
+        try {
+          const stats = fs.statSync(dir);
+          const mode = (stats.mode & 0o777).toString(8);
+          output += `  ${dir}: exists (mode: ${mode})\n`;
+        } catch {
+          output += `  ${dir}: DOES NOT EXIST\n`;
+        }
+      }
+
+      output += "\n=== Environment check complete ===\n";
+      return res.json({ ok: true, output });
+    }
+
     if (cmd === "openclaw.logs.tail") {
       const lines = Math.max(50, Math.min(1000, Number.parseInt(arg || "200", 10) || 200));
       const r = await runCmd(OPENCLAW_NODE, clawArgs(["logs", "--tail", String(lines)]));
@@ -1209,6 +1347,129 @@ app.post("/setup/api/console/run", requireSetupAuth, async (req, res) => {
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) });
   }
+});
+
+// Health check endpoint - runs doctor and returns structured results
+app.get("/setup/api/health", requireSetupAuth, async (_req, res) => {
+  try {
+    const r = await runCmd(OPENCLAW_NODE, clawArgs(["doctor"]));
+    const output = redactSecrets(r.output);
+
+    // Parse output to extract issues
+    const issues = [];
+    const lines = output.split("\n");
+    for (const line of lines) {
+      if (line.includes("CRITICAL") || line.includes("permission") || line.includes("missing") || line.includes("Error")) {
+        issues.push(line.trim());
+      }
+    }
+
+    res.json({
+      ok: r.code === 0,
+      healthy: r.code === 0 && issues.length === 0,
+      issues,
+      output,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// Fix all issues endpoint - runs all fixes in sequence
+app.post("/setup/api/health/fix-all", requireSetupAuth, async (req, res) => {
+  const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+  auditLog("HEALTH_FIX_ALL", { ip });
+
+  const steps = [];
+  let output = "╔══════════════════════════════════════════════════════════════╗\n";
+  output += "║           🔧 AUTOMATIC ISSUE REPAIR IN PROGRESS 🔧           ║\n";
+  output += "╚══════════════════════════════════════════════════════════════╝\n\n";
+
+  // Step 1: Create missing directories
+  output += "━━━ Step 1/4: Creating missing directories ━━━\n";
+  const dirsToCreate = [
+    path.join(STATE_DIR, "credentials"),
+    path.join(STATE_DIR, "identity"),
+    path.join(STATE_DIR, "logs"),
+    path.join(STATE_DIR, "sessions"),
+    WORKSPACE_DIR,
+  ];
+  let dirSuccess = true;
+  for (const dir of dirsToCreate) {
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      output += `  ✓ ${dir}\n`;
+    } catch (err) {
+      output += `  ✗ ${dir}: ${err.message}\n`;
+      dirSuccess = false;
+    }
+  }
+  steps.push({ name: "Create directories", ok: dirSuccess });
+  output += "\n";
+
+  // Step 2: Fix permissions
+  output += "━━━ Step 2/4: Fixing directory permissions ━━━\n";
+  let permSuccess = true;
+  const dirsToFix = [STATE_DIR, WORKSPACE_DIR, ...dirsToCreate.filter((d) => d !== WORKSPACE_DIR)];
+  for (const dir of dirsToFix) {
+    try {
+      if (fs.existsSync(dir)) {
+        fs.chmodSync(dir, 0o700);
+        output += `  ✓ chmod 700 ${dir}\n`;
+      }
+    } catch (err) {
+      output += `  ✗ ${dir}: ${err.message}\n`;
+      permSuccess = false;
+    }
+  }
+  steps.push({ name: "Fix permissions", ok: permSuccess });
+  output += "\n";
+
+  // Step 3: Run openclaw doctor --fix
+  output += "━━━ Step 3/4: Running openclaw doctor --fix ━━━\n";
+  const doctorResult = await runCmd(OPENCLAW_NODE, clawArgs(["doctor", "--fix"]));
+  const doctorOk = doctorResult.code === 0;
+  output += redactSecrets(doctorResult.output) + "\n";
+  steps.push({ name: "OpenClaw doctor --fix", ok: doctorOk });
+
+  // Step 4: Restart gateway
+  output += "━━━ Step 4/4: Restarting gateway ━━━\n";
+  try {
+    await restartGateway();
+    output += "  ✓ Gateway restarted successfully\n";
+    steps.push({ name: "Restart gateway", ok: true });
+  } catch (err) {
+    output += `  ✗ Gateway restart failed: ${err.message}\n`;
+    steps.push({ name: "Restart gateway", ok: false });
+  }
+  output += "\n";
+
+  // Final health check
+  output += "━━━ Final Health Check ━━━\n";
+  const finalCheck = await runCmd(OPENCLAW_NODE, clawArgs(["doctor"]));
+  const finalHealthy = finalCheck.code === 0;
+  output += redactSecrets(finalCheck.output) + "\n";
+
+  // Summary
+  const allOk = steps.every((s) => s.ok);
+  output += "╔══════════════════════════════════════════════════════════════╗\n";
+  output += allOk
+    ? "║                    ✅ ALL REPAIRS COMPLETE                    ║\n"
+    : "║              ⚠️  SOME REPAIRS MAY HAVE FAILED                 ║\n";
+  output += "╚══════════════════════════════════════════════════════════════╝\n";
+  output += "\nSummary:\n";
+  for (const step of steps) {
+    output += `  ${step.ok ? "✓" : "✗"} ${step.name}\n`;
+  }
+
+  auditLog("HEALTH_FIX_ALL_COMPLETE", { ip, allOk, finalHealthy, steps });
+
+  res.json({
+    ok: allOk,
+    healthy: finalHealthy,
+    steps,
+    output,
+  });
 });
 
 app.get("/setup/api/config/raw", requireSetupAuth, async (_req, res) => {
@@ -1263,7 +1524,13 @@ app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
     return res.status(400).json({ ok: false, error: "Missing channel or code" });
   }
   auditLog("PAIRING_APPROVE", { ip, channel, code });
-  const r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "approve", String(channel), String(code)]));
+
+  // Try with --channel flag first, then positional
+  let r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "approve", "--channel", String(channel), String(code)]));
+  if (r.code !== 0) {
+    r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "approve", String(channel), String(code)]));
+  }
+
   if (r.code === 0) {
     auditLog("PAIRING_APPROVED", { ip, channel, code });
   } else {
@@ -1273,14 +1540,48 @@ app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
 });
 
 // List pending pairing requests
-app.get("/setup/api/pairing/pending", requireSetupAuth, async (_req, res) => {
+app.get("/setup/api/pairing/pending", requireSetupAuth, async (req, res) => {
+  // Try to list for all known channels
+  const channels = ["telegram", "discord", "slack"];
+  const allPending = [];
+  let lastOutput = "";
+
+  for (const channel of channels) {
+    // Try with --channel flag first, then positional
+    let r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "list", "--channel", channel, "--json"]));
+    if (r.code !== 0) {
+      // Fall back to positional argument
+      r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "list", channel, "--json"]));
+    }
+    lastOutput = r.output;
+    try {
+      const pending = JSON.parse(r.output);
+      if (Array.isArray(pending)) {
+        for (const p of pending) {
+          allPending.push({ ...p, channel: p.channel || channel });
+        }
+      }
+    } catch {
+      // Channel may not be configured or CLI format changed - ignore
+    }
+  }
+
+  // Also try without channel for legacy compatibility
   const r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "list", "--json"]));
   try {
     const pending = JSON.parse(r.output);
-    return res.json({ ok: true, pending });
+    if (Array.isArray(pending)) {
+      for (const p of pending) {
+        // Avoid duplicates
+        const exists = allPending.some((x) => x.code === (p.code || p.pairingCode) && x.channel === (p.channel || p.type));
+        if (!exists) allPending.push(p);
+      }
+    }
   } catch {
-    return res.json({ ok: r.code === 0, output: r.output, pending: [] });
+    // Ignore parse errors
   }
+
+  return res.json({ ok: true, pending: allPending, output: allPending.length === 0 ? lastOutput : undefined });
 });
 
 // Approve all pending pairing requests (convenience endpoint)
@@ -1288,20 +1589,55 @@ app.post("/setup/api/pairing/approve-all", requireSetupAuth, async (req, res) =>
   const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
   auditLog("PAIRING_APPROVE_ALL", { ip });
 
-  const listResult = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "list", "--json"]));
+  // Collect pending from all channels using the updated method
+  const channels = ["telegram", "discord", "slack"];
   let pending = [];
+
+  for (const channel of channels) {
+    let listResult = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "list", "--channel", channel, "--json"]));
+    if (listResult.code !== 0) {
+      listResult = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "list", channel, "--json"]));
+    }
+    try {
+      const items = JSON.parse(listResult.output);
+      if (Array.isArray(items)) {
+        for (const p of items) {
+          pending.push({ ...p, channel: p.channel || channel });
+        }
+      }
+    } catch {
+      // Channel not configured or parse error - ignore
+    }
+  }
+
+  // Also try legacy format
+  const legacyResult = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "list", "--json"]));
   try {
-    pending = JSON.parse(listResult.output);
+    const items = JSON.parse(legacyResult.output);
+    if (Array.isArray(items)) {
+      for (const p of items) {
+        const exists = pending.some((x) => x.code === (p.code || p.pairingCode) && x.channel === (p.channel || p.type));
+        if (!exists) pending.push(p);
+      }
+    }
   } catch {
-    return res.status(500).json({ ok: false, error: "Failed to list pending requests", output: listResult.output });
+    // Ignore
+  }
+
+  if (pending.length === 0) {
+    return res.json({ ok: true, approved: 0, results: [], message: "No pending pairing requests found" });
   }
 
   const results = [];
-  for (const req of pending) {
-    const channel = req.channel || req.type;
-    const code = req.code || req.pairingCode;
+  for (const pairingReq of pending) {
+    const channel = pairingReq.channel || pairingReq.type;
+    const code = pairingReq.code || pairingReq.pairingCode;
     if (channel && code) {
-      const r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "approve", String(channel), String(code)]));
+      // Try with --channel flag first, then positional
+      let r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "approve", "--channel", String(channel), String(code)]));
+      if (r.code !== 0) {
+        r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "approve", String(channel), String(code)]));
+      }
       results.push({ channel, code, ok: r.code === 0, output: r.output });
     }
   }

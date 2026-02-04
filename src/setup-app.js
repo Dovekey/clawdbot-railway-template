@@ -143,6 +143,52 @@
     });
   };
 
+  // Command hints for the debug console
+  var commandHints = {
+    'gateway.restart': 'Restarts the internal gateway process',
+    'gateway.stop': 'Stops the internal gateway process',
+    'gateway.start': 'Starts the internal gateway process',
+    'openclaw.doctor': 'Runs diagnostics and shows any issues',
+    'openclaw.doctor.fix': 'Runs diagnostics and attempts to fix issues automatically',
+    'openclaw.status': 'Shows current status',
+    'openclaw.health': 'Health check endpoint status',
+    'openclaw.logs.tail': 'Arg: number of lines (50-1000, default: 200)',
+    'openclaw.security.audit': 'Arg: "deep" for thorough scan',
+    'openclaw.config.get': 'Arg: config path (e.g. gateway.port, security.dmPolicy)',
+    'openclaw.version': 'Shows version information',
+    'wrapper.fix.dirs': 'Creates missing directories (credentials, identity, logs, sessions)',
+    'wrapper.fix.permissions': 'Sets directory permissions to 700 (owner only)',
+    'wrapper.env.check': 'Shows environment variables and directory status'
+  };
+
+  var consoleArgHintEl = document.getElementById('consoleArgHint');
+
+  // Update hint when command changes
+  function updateCommandHint() {
+    if (!consoleCmdEl || !consoleArgHintEl) return;
+    var cmd = consoleCmdEl.value;
+    var hint = commandHints[cmd] || '';
+    consoleArgHintEl.textContent = hint;
+
+    // Also update placeholder based on command
+    if (consoleArgEl) {
+      if (cmd === 'openclaw.logs.tail') {
+        consoleArgEl.placeholder = 'Lines (50-1000)';
+      } else if (cmd === 'openclaw.config.get') {
+        consoleArgEl.placeholder = 'Config path (e.g. gateway.port)';
+      } else if (cmd === 'openclaw.security.audit') {
+        consoleArgEl.placeholder = 'Optional: deep';
+      } else {
+        consoleArgEl.placeholder = '';
+      }
+    }
+  }
+
+  if (consoleCmdEl) {
+    consoleCmdEl.onchange = updateCommandHint;
+    updateCommandHint(); // Initial hint
+  }
+
   // Debug console runner
   function runConsole() {
     if (!consoleCmdEl || !consoleRunEl) return;
@@ -165,6 +211,92 @@
   if (consoleRunEl) {
     consoleRunEl.onclick = runConsole;
   }
+
+  // Health check elements
+  var healthCheckBtn = document.getElementById('healthCheck');
+  var fixAllBtn = document.getElementById('fixAllIssues');
+  var healthOutEl = document.getElementById('healthOut');
+  var healthStatusEl = document.getElementById('healthStatus');
+  var healthStatusTextEl = document.getElementById('healthStatusText');
+  var healthProgressEl = document.getElementById('healthProgress');
+
+  function showHealthStatus(text, progress, color) {
+    if (healthStatusEl) {
+      healthStatusEl.style.display = 'block';
+      healthStatusEl.style.borderLeft = '4px solid ' + (color || '#3b82f6');
+    }
+    if (healthStatusTextEl) healthStatusTextEl.textContent = text;
+    if (healthProgressEl) healthProgressEl.textContent = progress || '';
+  }
+
+  function hideHealthStatus() {
+    if (healthStatusEl) healthStatusEl.style.display = 'none';
+  }
+
+  // Run health check
+  function runHealthCheck() {
+    if (healthOutEl) healthOutEl.textContent = '';
+    showHealthStatus('🔍 Running health check...', 'Please wait...', '#3b82f6');
+
+    return httpJson('/setup/api/health').then(function (j) {
+      if (healthOutEl) healthOutEl.textContent = j.output || JSON.stringify(j, null, 2);
+
+      if (j.healthy) {
+        showHealthStatus('✅ System is healthy!', 'No issues detected', '#10b981');
+      } else {
+        var issueCount = j.issues ? j.issues.length : 0;
+        showHealthStatus(
+          '⚠️ Issues detected (' + issueCount + ')',
+          'Click "Fix All Issues" to repair automatically',
+          '#f59e0b'
+        );
+      }
+      return refreshStatus();
+    }).catch(function (e) {
+      if (healthOutEl) healthOutEl.textContent = 'Error: ' + String(e);
+      showHealthStatus('❌ Health check failed', String(e), '#ef4444');
+    });
+  }
+
+  // Fix all issues
+  function runFixAll() {
+    if (!confirm('This will attempt to fix all detected issues:\n\n• Create missing directories\n• Fix directory permissions\n• Run openclaw doctor --fix\n• Restart the gateway\n\nContinue?')) {
+      return;
+    }
+
+    if (healthOutEl) healthOutEl.textContent = '';
+    showHealthStatus('🔧 Fixing issues...', 'Step 1/4: Creating directories...', '#8b5cf6');
+
+    return httpJson('/setup/api/health/fix-all', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' }
+    }).then(function (j) {
+      if (healthOutEl) healthOutEl.textContent = j.output || JSON.stringify(j, null, 2);
+
+      if (j.healthy) {
+        showHealthStatus('✅ All issues fixed!', 'System is now healthy', '#10b981');
+      } else if (j.ok) {
+        showHealthStatus(
+          '⚠️ Repairs completed with warnings',
+          'Some issues may require manual attention',
+          '#f59e0b'
+        );
+      } else {
+        showHealthStatus(
+          '❌ Some repairs failed',
+          'Check the output below for details',
+          '#ef4444'
+        );
+      }
+      return refreshStatus();
+    }).catch(function (e) {
+      if (healthOutEl) healthOutEl.textContent = 'Error: ' + String(e);
+      showHealthStatus('❌ Fix failed', String(e), '#ef4444');
+    });
+  }
+
+  if (healthCheckBtn) healthCheckBtn.onclick = runHealthCheck;
+  if (fixAllBtn) fixAllBtn.onclick = runFixAll;
 
   // Config raw load/save
   function loadConfigRaw() {
