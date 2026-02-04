@@ -143,6 +143,52 @@
     });
   };
 
+  // Command hints for the debug console
+  var commandHints = {
+    'gateway.restart': 'Restarts the internal gateway process',
+    'gateway.stop': 'Stops the internal gateway process',
+    'gateway.start': 'Starts the internal gateway process',
+    'openclaw.doctor': 'Runs diagnostics and shows any issues',
+    'openclaw.doctor.fix': 'Runs diagnostics and attempts to fix issues automatically',
+    'openclaw.status': 'Shows current status',
+    'openclaw.health': 'Health check endpoint status',
+    'openclaw.logs.tail': 'Arg: number of lines (50-1000, default: 200)',
+    'openclaw.security.audit': 'Arg: "deep" for thorough scan',
+    'openclaw.config.get': 'Arg: config path (e.g. gateway.port, security.dmPolicy)',
+    'openclaw.version': 'Shows version information',
+    'wrapper.fix.dirs': 'Creates missing directories (credentials, identity, logs, sessions)',
+    'wrapper.fix.permissions': 'Sets directory permissions to 700 (owner only)',
+    'wrapper.env.check': 'Shows environment variables and directory status'
+  };
+
+  var consoleArgHintEl = document.getElementById('consoleArgHint');
+
+  // Update hint when command changes
+  function updateCommandHint() {
+    if (!consoleCmdEl || !consoleArgHintEl) return;
+    var cmd = consoleCmdEl.value;
+    var hint = commandHints[cmd] || '';
+    consoleArgHintEl.textContent = hint;
+
+    // Also update placeholder based on command
+    if (consoleArgEl) {
+      if (cmd === 'openclaw.logs.tail') {
+        consoleArgEl.placeholder = 'Lines (50-1000)';
+      } else if (cmd === 'openclaw.config.get') {
+        consoleArgEl.placeholder = 'Config path (e.g. gateway.port)';
+      } else if (cmd === 'openclaw.security.audit') {
+        consoleArgEl.placeholder = 'Optional: deep';
+      } else {
+        consoleArgEl.placeholder = '';
+      }
+    }
+  }
+
+  if (consoleCmdEl) {
+    consoleCmdEl.onchange = updateCommandHint;
+    updateCommandHint(); // Initial hint
+  }
+
   // Debug console runner
   function runConsole() {
     if (!consoleCmdEl || !consoleRunEl) return;
