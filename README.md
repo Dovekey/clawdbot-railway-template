@@ -19,12 +19,12 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - During setup, the wrapper runs `openclaw onboard --non-interactive ...` inside the container, writes state to the volume, and then starts the gateway.
 - After setup, **`/` is OpenClaw**. The wrapper reverse-proxies all traffic (including WebSockets) to the local gateway process.
 
-## Railway deploy instructions (what you’ll publish as a Template)
+## Railway deploy instructions (what you'll publish as a Template)
 
 In Railway Template Composer:
 
 1) Create a new template from this GitHub repo.
-2) Add a **Volume** mounted at `/data`.
+2) **CRITICAL: Add a Volume mounted at `/data`** (see below)
 3) Set the following variables:
 
 Required:
@@ -32,7 +32,7 @@ Required:
 
 Recommended:
 - `OPENCLAW_STATE_DIR=/data/.openclaw`
-- `OPENCLAW_WORKSPACE_DIR=/data/workspace`
+- `OPENCLAW_WORKSPACE_DIR=/data/.openclaw/workspace`
 
 Optional:
 - `OPENCLAW_GATEWAY_TOKEN` — if not set, the wrapper generates one (not ideal). In a template, set it using a generated secret.
@@ -42,6 +42,23 @@ Notes:
 
 4) Enable **Public Networking** (HTTP). Railway will assign a domain.
 5) Deploy.
+
+### IMPORTANT: Railway Volume Setup
+
+**Without a volume, all data is lost when the container restarts!**
+
+To add a volume in Railway:
+1. Go to your service in the Railway dashboard
+2. Click **Settings** → **Volumes**
+3. Click **Add Volume**
+4. Set **Mount Path** to `/data`
+5. Click **Save** and redeploy
+
+To verify your volume is working:
+- Visit `https://<your-app>.up.railway.app/health/storage`
+- Check that `persistent: true` and `storageType: "railway-volume"`
+
+If you see `persistent: false` or `storageType: "temporary"`, your volume is not properly configured.
 
 Then:
 - Visit `https://<your-app>.up.railway.app/setup`
@@ -91,6 +108,41 @@ If you want open access (anyone can message), edit the config:
 4) Copy the **Bot Token** and paste it into `/setup`
 5) Invite the bot to your server (OAuth2 URL Generator → scopes: `bot`, `applications.commands`; then choose permissions)
 
+## Troubleshooting: Data not persisting
+
+If your configuration or chat history is lost after restarts:
+
+### Check storage status
+Visit `https://<your-app>.up.railway.app/health/storage` to see:
+- Whether storage is persistent
+- What storage type is being used
+- Volume mount status and permissions
+
+### Common issues
+
+**1. No Railway volume mounted**
+- Symptom: `storageType: "temporary"` or `storageType: "home-directory"`
+- Fix: Add a volume mounted at `/data` in Railway Settings → Volumes
+
+**2. Volume permission issues**
+- Symptom: Container logs show "Cannot write to /data/.openclaw"
+- Fix: Delete the volume and create a new one (Railway volumes sometimes have stale permissions)
+
+**3. Wrong environment variables**
+- Symptom: Data saves to wrong location
+- Fix: Ensure `OPENCLAW_STATE_DIR=/data/.openclaw` and `OPENCLAW_WORKSPACE_DIR=/data/.openclaw/workspace`
+
+### Checking container logs
+In Railway, check deployment logs for lines like:
+```
+[entrypoint] ✓ Using persistent data directory: /data/.openclaw
+```
+
+If you see this warning, your data will NOT persist:
+```
+[entrypoint] ⚠⚠⚠ USING /tmp AS LAST RESORT ⚠⚠⚠
+```
+
 ## Local smoke test
 
 ```bash
@@ -100,7 +152,7 @@ docker run --rm -p 8080:8080 \
   -e PORT=8080 \
   -e SETUP_PASSWORD=test \
   -e OPENCLAW_STATE_DIR=/data/.openclaw \
-  -e OPENCLAW_WORKSPACE_DIR=/data/workspace \
+  -e OPENCLAW_WORKSPACE_DIR=/data/.openclaw/workspace \
   -v $(pwd)/.tmpdata:/data \
   openclaw-railway-template
 

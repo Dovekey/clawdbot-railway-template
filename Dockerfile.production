@@ -41,9 +41,11 @@ RUN npm ci --only=production
 
 FROM node:22-alpine AS runtime
 
-# Security: non-root user
+# Security: non-root user with home directory as fallback storage
 RUN addgroup -g 1001 -S openclaw && \
-    adduser -S -D -H -u 1001 -G openclaw openclaw
+    adduser -S -D -u 1001 -G openclaw -h /home/openclaw openclaw && \
+    mkdir -p /home/openclaw/.openclaw && \
+    chown -R openclaw:openclaw /home/openclaw
 
 # Install runtime dependencies only
 RUN apk add --no-cache ca-certificates tini

@@ -145,6 +145,41 @@ function findWritableWorkspaceDir() {
 
 const WORKSPACE_DIR = findWritableWorkspaceDir();
 
+// Check if data is truly persistent (using /data Railway volume)
+// This helps users understand if their data will survive container restarts
+function checkDataPersistence() {
+  const isPersistent = process.env.OPENCLAW_DATA_PERSISTENT === "true" ||
+    STATE_DIR.startsWith("/data");
+  const isVolumeMounted = fs.existsSync("/data") && STATE_DIR.startsWith("/data");
+  const storageType = STATE_DIR.startsWith("/data")
+    ? "railway-volume"
+    : STATE_DIR.startsWith("/tmp")
+      ? "temporary"
+      : STATE_DIR.includes("/home/")
+        ? "home-directory"
+        : "unknown";
+
+  return {
+    persistent: isPersistent && isVolumeMounted,
+    storageType,
+    stateDir: STATE_DIR,
+    workspaceDir: WORKSPACE_DIR,
+    warning: !isPersistent || !isVolumeMounted
+      ? "Data may not persist across container restarts. Add a Railway volume mounted at /data."
+      : null,
+  };
+}
+
+const DATA_PERSISTENCE = checkDataPersistence();
+
+// Log persistence warning at startup
+if (!DATA_PERSISTENCE.persistent) {
+  console.warn(`[wrapper] ⚠️ WARNING: Data persistence issue detected!`);
+  console.warn(`[wrapper] Storage type: ${DATA_PERSISTENCE.storageType}`);
+  console.warn(`[wrapper] State directory: ${DATA_PERSISTENCE.stateDir}`);
+  console.warn(`[wrapper] ${DATA_PERSISTENCE.warning}`);
+}
+
 // Protect /setup with a user-provided password.
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
 
@@ -613,6 +648,10 @@ app.get("/health", (_req, res) => {
     ok: true,
     configured: isConfigured(),
     gateway: gatewayProc ? "running" : "stopped",
+    storage: {
+      persistent: DATA_PERSISTENCE.persistent,
+      type: DATA_PERSISTENCE.storageType,
+    },
     timestamp: new Date().toISOString()
   };
   res.json(status);
@@ -621,7 +660,59 @@ app.get("/health", (_req, res) => {
 // === OBSERVABILITY ENDPOINTS ===
 // Detailed health with system metrics
 app.get("/health/detailed", (_req, res) => {
-  res.json(getHealthStatus(isConfigured(), gatewayProc));
+  const health = getHealthStatus(isConfigured(), gatewayProc);
+  health.storage = DATA_PERSISTENCE;
+  res.json(health);
+});
+
+// Storage-specific health check - useful for debugging persistence issues
+app.get("/health/storage", (_req, res) => {
+  const volumeExists = fs.existsSync("/data");
+  let volumeWritable = false;
+  let volumeStats = null;
+
+  if (volumeExists) {
+    try {
+      const testPath = "/data/.write-test-" + Date.now();
+      fs.writeFileSync(testPath, "test");
+      fs.unlinkSync(testPath);
+      volumeWritable = true;
+    } catch {
+      volumeWritable = false;
+    }
+
+    try {
+      const stats = fs.statSync("/data");
+      volumeStats = {
+        uid: stats.uid,
+        gid: stats.gid,
+        mode: stats.mode.toString(8),
+      };
+    } catch {
+      // ignore
+    }
+  }
+
+  const storageStatus = {
+    ...DATA_PERSISTENCE,
+    volume: {
+      path: "/data",
+      exists: volumeExists,
+      writable: volumeWritable,
+      stats: volumeStats,
+    },
+    environment: {
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || "(not set)",
+      OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR || "(not set)",
+      OPENCLAW_DATA_PERSISTENT: process.env.OPENCLAW_DATA_PERSISTENT || "(not set)",
+      HOME: process.env.HOME || "(not set)",
+    },
+    recommendation: !DATA_PERSISTENCE.persistent
+      ? "Add a Railway volume mounted at /data to enable persistent storage"
+      : "Storage is properly configured for persistence",
+  };
+
+  res.json(storageStatus);
 });
 
 // JSON metrics for dashboards
@@ -2490,7 +2581,23 @@ const server = app.listen(PORT, "0.0.0.0", () => {
     gatewayTarget: GATEWAY_TARGET,
     configured: isConfigured(),
     setupPasswordSet: Boolean(SETUP_PASSWORD),
+    storage: DATA_PERSISTENCE,
   });
+
+  // Log storage persistence status prominently
+  if (!DATA_PERSISTENCE.persistent) {
+    logger.warn("DATA PERSISTENCE WARNING", {
+      message: "Data may not persist across container restarts!",
+      storageType: DATA_PERSISTENCE.storageType,
+      stateDir: DATA_PERSISTENCE.stateDir,
+      recommendation: DATA_PERSISTENCE.warning,
+    });
+  } else {
+    logger.info("Storage configured for persistence", {
+      storageType: DATA_PERSISTENCE.storageType,
+      stateDir: DATA_PERSISTENCE.stateDir,
+    });
+  }
 
   if (!SETUP_PASSWORD) {
     logger.warn("SETUP_PASSWORD is not set; /setup will error");
@@ -2501,6 +2608,7 @@ const server = app.listen(PORT, "0.0.0.0", () => {
     endpoints: [
       "/health",
       "/health/detailed",
+      "/health/storage",
       "/metrics",
       "/metrics/prometheus",
       "/diagnostics",
