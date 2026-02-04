@@ -12,6 +12,37 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - **Security-hardened Dockerfile** (non-root user, Alpine base, pinned version)
 - **Pairing-based DM policy** for secure channel access control
 
+## Supported AI Providers
+
+The setup wizard supports multiple AI providers:
+
+| Provider | Auth Method |
+|----------|-------------|
+| **OpenRouter** | API key |
+| **Anthropic** | API key, Claude Code CLI, OAuth |
+| **OpenAI** | API key, Codex OAuth, ChatGPT OAuth |
+| **Google** | Gemini API key, OAuth |
+| **Vercel AI Gateway** | API key |
+| **Moonshot/Kimi** | API key |
+| **MiniMax** | API key |
+| **GitHub Copilot** | Device login |
+| **And more...** | See setup wizard |
+
+## Supported Messaging Channels
+
+Connect to any of these platforms:
+
+| Channel | Setup Required |
+|---------|----------------|
+| **WebChat** | None (built-in) |
+| **Telegram** | Bot token from @BotFather |
+| **Discord** | Bot token from Developer Portal |
+| **Slack** | Bot + App tokens |
+| **Email** | SMTP/IMAP credentials |
+| **WhatsApp** | QR code scan |
+| **Signal** | Phone number |
+| **And more...** | See [MESSAGING-INTEGRATIONS.md](docs/MESSAGING-INTEGRATIONS.md) |
+
 ## How it works (high level)
 
 - The container runs a wrapper web server.

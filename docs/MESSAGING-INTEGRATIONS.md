@@ -19,7 +19,8 @@
 | **Zalo** | Native integration |
 | **Zalo Personal** | Native integration |
 | **BlueBubbles** | Native integration |
-| **WebChat** | Built-in web interface |
+| **WebChat** | Built-in web interface (no setup required) |
+| **Email** | SMTP/IMAP for sending and receiving emails |
 
 ## How It Works
 
@@ -62,6 +63,23 @@ This delivers your message back to whichever platform you've configured (WhatsAp
 1. Register a Signal phone number
 2. Configure via OpenClaw CLI
 3. Uses Signal's native protocol
+
+### Email (SMTP/IMAP)
+
+1. Get your email provider's SMTP settings:
+   - **Gmail**: smtp.gmail.com:587, imap.gmail.com:993 (requires App Password)
+   - **Outlook**: smtp.office365.com:587, outlook.office365.com:993
+   - **Custom**: Check your email provider's documentation
+2. For Gmail, create an App Password at https://myaccount.google.com/apppasswords
+3. Enter SMTP and IMAP settings in the setup wizard
+4. Email will be used for both sending and receiving messages
+
+### WebChat
+
+WebChat is the built-in web interface that requires **no setup**:
+1. Access your OpenClaw instance via the browser
+2. Navigate to `/openclaw` to use the web chat interface
+3. WebChat is enabled by default and uses the same authentication as the gateway
 
 ## Observability for Messaging
 

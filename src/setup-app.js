@@ -202,7 +202,16 @@
       telegramToken: document.getElementById('telegramToken').value,
       discordToken: document.getElementById('discordToken').value,
       slackBotToken: document.getElementById('slackBotToken').value,
-      slackAppToken: document.getElementById('slackAppToken').value
+      slackAppToken: document.getElementById('slackAppToken').value,
+      // Email configuration
+      emailSmtpHost: document.getElementById('emailSmtpHost').value,
+      emailSmtpPort: document.getElementById('emailSmtpPort').value,
+      emailSmtpUser: document.getElementById('emailSmtpUser').value,
+      emailSmtpPassword: document.getElementById('emailSmtpPassword').value,
+      emailImapHost: document.getElementById('emailImapHost').value,
+      emailImapPort: document.getElementById('emailImapPort').value,
+      // WebChat configuration
+      webchatEnabled: document.getElementById('webchatEnabled').checked
     };
 
     logEl.textContent = 'Running setup...\n';

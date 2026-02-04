@@ -563,6 +563,8 @@ function loadConfigForForm() {
     telegramEnabled: false,
     discordEnabled: false,
     slackEnabled: false,
+    emailEnabled: false,
+    webchatEnabled: false,
   };
 
   try {
@@ -586,6 +588,8 @@ function loadConfigForForm() {
       result.telegramEnabled = cfg.channels.telegram?.enabled ?? false;
       result.discordEnabled = cfg.channels.discord?.enabled ?? false;
       result.slackEnabled = cfg.channels.slack?.enabled ?? false;
+      result.emailEnabled = cfg.channels.email?.enabled ?? false;
+      result.webchatEnabled = cfg.channels.webchat?.enabled ?? true; // Webchat enabled by default
     }
   } catch {
     // Config doesn't exist or is invalid, use defaults
@@ -1933,6 +1937,35 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
 
         <label>Slack app token</label>
         <input id="slackAppToken" type="password" placeholder="xapp-..." />
+
+        <div class="section-divider">Email (SMTP)</div>
+
+        <label>SMTP Host</label>
+        <input id="emailSmtpHost" type="text" placeholder="smtp.gmail.com" />
+
+        <label>SMTP Port</label>
+        <input id="emailSmtpPort" type="text" placeholder="587" />
+
+        <label>SMTP User (email address)</label>
+        <input id="emailSmtpUser" type="text" placeholder="you@example.com" />
+
+        <label>SMTP Password / App Password</label>
+        <input id="emailSmtpPassword" type="password" placeholder="App-specific password" />
+
+        <label>IMAP Host (for receiving)</label>
+        <input id="emailImapHost" type="text" placeholder="imap.gmail.com" />
+
+        <label>IMAP Port</label>
+        <input id="emailImapPort" type="text" placeholder="993" />
+        ${formConfig.emailEnabled ? '<div class="hint success">Email Enabled</div>' : ''}
+
+        <div class="section-divider">WebChat</div>
+
+        <label>
+          <input id="webchatEnabled" type="checkbox" ${formConfig.webchatEnabled ? 'checked' : ''} />
+          Enable WebChat (built-in web interface)
+        </label>
+        ${formConfig.webchatEnabled ? '<div class="hint success">WebChat Enabled</div>' : ''}
       </div>
 
       <!-- Onboarding Card -->
@@ -2256,6 +2289,53 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         extra += `\n[slack verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
       }
     }
+
+    // Email (SMTP/IMAP) configuration
+    if (payload.emailSmtpHost?.trim() && payload.emailSmtpUser?.trim() && payload.emailSmtpPassword?.trim()) {
+      if (!supports("email")) {
+        extra += "\n[email] skipped (this openclaw build does not list email in `channels add --help`)\n";
+      } else {
+        const cfgObj = {
+          enabled: true,
+          smtp: {
+            host: payload.emailSmtpHost.trim(),
+            port: parseInt(payload.emailSmtpPort?.trim() || "587", 10),
+            secure: parseInt(payload.emailSmtpPort?.trim() || "587", 10) === 465,
+            auth: {
+              user: payload.emailSmtpUser.trim(),
+              pass: payload.emailSmtpPassword.trim(),
+            },
+          },
+          imap: payload.emailImapHost?.trim() ? {
+            host: payload.emailImapHost.trim(),
+            port: parseInt(payload.emailImapPort?.trim() || "993", 10),
+            secure: true,
+            auth: {
+              user: payload.emailSmtpUser.trim(),
+              pass: payload.emailSmtpPassword.trim(),
+            },
+          } : undefined,
+          fromAddress: payload.emailSmtpUser.trim(),
+        };
+        const set = await runCmd(
+          OPENCLAW_NODE,
+          clawArgs(["config", "set", "--json", "channels.email", JSON.stringify(cfgObj)]),
+        );
+        const get = await runCmd(OPENCLAW_NODE, clawArgs(["config", "get", "channels.email"]));
+        extra += `\n[email config] exit=${set.code} (output ${set.output.length} chars)\n${set.output || "(no output)"}`;
+        extra += `\n[email verify] exit=${get.code} (output ${get.output.length} chars)\n${get.output || "(no output)"}`;
+      }
+    }
+
+    // WebChat configuration
+    const webchatCfg = {
+      enabled: payload.webchatEnabled !== false, // Default to true
+    };
+    const webchatSet = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "--json", "channels.webchat", JSON.stringify(webchatCfg)]),
+    );
+    extra += `\n[webchat config] exit=${webchatSet.code}\n`;
 
     // Apply changes immediately.
     await restartGateway();

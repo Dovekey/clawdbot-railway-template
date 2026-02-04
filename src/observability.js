@@ -52,6 +52,7 @@ const SUPPORTED_CHANNELS = [
   "zalo-personal",
   "bluebubbles",
   "webchat",
+  "email",
 ];
 
 const metrics = {

@@ -79,6 +79,9 @@
     }
   },
   "channels": {
+    "webchat": {
+      "enabled": true
+    },
     "telegram": {
       "enabled": false,
       "dmPolicy": "pairing",
@@ -94,6 +97,28 @@
     },
     "slack": {
       "enabled": false
+    },
+    "email": {
+      "enabled": false,
+      "smtp": {
+        "host": "smtp.gmail.com",
+        "port": 587,
+        "secure": false,
+        "auth": {
+          "user": "you@gmail.com",
+          "pass": "app-specific-password"
+        }
+      },
+      "imap": {
+        "host": "imap.gmail.com",
+        "port": 993,
+        "secure": true,
+        "auth": {
+          "user": "you@gmail.com",
+          "pass": "app-specific-password"
+        }
+      },
+      "fromAddress": "you@gmail.com"
     }
   },
   "logging": {
