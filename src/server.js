@@ -225,7 +225,18 @@ const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 
-// Minimal health endpoint for Railway.
+// Health endpoint for Railway (primary)
+app.get("/health", (_req, res) => {
+  const status = {
+    ok: true,
+    configured: isConfigured(),
+    gateway: gatewayProc ? "running" : "stopped",
+    timestamp: new Date().toISOString()
+  };
+  res.json(status);
+});
+
+// Legacy health endpoint for backward compatibility
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
 
 app.get("/setup/app.js", requireSetupAuth, (_req, res) => {
@@ -354,10 +365,15 @@ app.get("/setup", requireSetupAuth, (_req, res) => {
   <div class="card">
     <h2>3) Run onboarding</h2>
     <button id="run">Run setup</button>
+    <button id="pairingList" style="background:#1e3a5f; margin-left:0.5rem">List pending</button>
     <button id="pairingApprove" style="background:#1f2937; margin-left:0.5rem">Approve pairing</button>
+    <button id="pairingApproveAll" style="background:#065f46; margin-left:0.5rem">Approve all</button>
     <button id="reset" style="background:#444; margin-left:0.5rem">Reset setup</button>
     <pre id="log" style="white-space:pre-wrap"></pre>
-    <p class="muted">Reset deletes the OpenClaw config file so you can rerun onboarding. Pairing approval lets you grant DM access when dmPolicy=pairing.</p>
+    <p class="muted">
+      <strong>Pairing required?</strong> When users message your bot, they receive a pairing code. Use "List pending" to see codes, then "Approve pairing" (single) or "Approve all" (batch).<br/>
+      Reset deletes the OpenClaw config file so you can rerun onboarding.
+    </p>
   </div>
 
   <script src="/setup/app.js"></script>
@@ -537,6 +553,29 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.bind", "loopback"]));
     await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.port", String(INTERNAL_GATEWAY_PORT)]));
+
+    // Apply security hardening configuration
+    // Security: require pairing for DM policy (users must be approved before chatting)
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "security.dmPolicy", "pairing"]));
+
+    // Security: require approval for high-risk actions
+    const requireApproval = JSON.stringify(["file_write", "network_request", "shell_command"]);
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "security.requireApprovalFor", requireApproval]));
+
+    // Security: enable sandbox mode for non-main agent sessions
+    const sandboxConfig = JSON.stringify({
+      mode: "non-main",
+      docker: {
+        readOnly: true,
+        capDrop: ["ALL"],
+        networkMode: "none",
+        memoryLimit: "512m",
+        cpuLimit: "0.5"
+      }
+    });
+    await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "--json", "agents.defaults.sandbox", sandboxConfig]));
+
+    extra += "\n[security] Applied security hardening configuration\n";
 
     const channelsHelp = await runCmd(OPENCLAW_NODE, clawArgs(["channels", "add", "--help"]));
     const helpText = channelsHelp.output || "";
@@ -779,6 +818,40 @@ app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
   }
   const r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "approve", String(channel), String(code)]));
   return res.status(r.code === 0 ? 200 : 500).json({ ok: r.code === 0, output: r.output });
+});
+
+// List pending pairing requests
+app.get("/setup/api/pairing/pending", requireSetupAuth, async (_req, res) => {
+  const r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "list", "--json"]));
+  try {
+    const pending = JSON.parse(r.output);
+    return res.json({ ok: true, pending });
+  } catch {
+    return res.json({ ok: r.code === 0, output: r.output, pending: [] });
+  }
+});
+
+// Approve all pending pairing requests (convenience endpoint)
+app.post("/setup/api/pairing/approve-all", requireSetupAuth, async (_req, res) => {
+  const listResult = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "list", "--json"]));
+  let pending = [];
+  try {
+    pending = JSON.parse(listResult.output);
+  } catch {
+    return res.status(500).json({ ok: false, error: "Failed to list pending requests", output: listResult.output });
+  }
+
+  const results = [];
+  for (const req of pending) {
+    const channel = req.channel || req.type;
+    const code = req.code || req.pairingCode;
+    if (channel && code) {
+      const r = await runCmd(OPENCLAW_NODE, clawArgs(["pairing", "approve", String(channel), String(code)]));
+      results.push({ channel, code, ok: r.code === 0, output: r.output });
+    }
+  }
+
+  return res.json({ ok: true, approved: results.length, results });
 });
 
 app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {

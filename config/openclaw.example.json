@@ -1,0 +1,50 @@
+{
+  "$schema": "https://openclaw.ai/schema/config.json",
+  "agents": {
+    "defaults": {
+      "sandbox": {
+        "mode": "non-main",
+        "docker": {
+          "readOnly": true,
+          "capDrop": ["ALL"],
+          "networkMode": "none",
+          "memoryLimit": "512m",
+          "cpuLimit": "0.5"
+        }
+      }
+    }
+  },
+  "security": {
+    "dmPolicy": "pairing",
+    "requireApprovalFor": ["file_write", "network_request", "shell_command"]
+  },
+  "gateway": {
+    "bind": "loopback",
+    "port": 18789,
+    "auth": {
+      "mode": "token"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "dmPolicy": "pairing",
+      "groupPolicy": "allowlist",
+      "streamMode": "partial"
+    },
+    "discord": {
+      "enabled": false,
+      "dm": {
+        "policy": "pairing"
+      },
+      "groupPolicy": "allowlist"
+    },
+    "slack": {
+      "enabled": false
+    }
+  },
+  "logging": {
+    "level": "info",
+    "format": "json"
+  }
+}

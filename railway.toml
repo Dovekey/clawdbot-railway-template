@@ -1,10 +1,16 @@
 [build]
 builder = "dockerfile"
+dockerfilePath = "Dockerfile.production"
 
 [deploy]
-healthcheckPath = "/setup/healthz"
+healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5
 
 [variables]
 PORT = "8080"
+NODE_ENV = "production"
+OPENCLAW_DISABLE_BONJOUR = "true"
+LOG_LEVEL = "info"
+LOG_FORMAT = "json"
