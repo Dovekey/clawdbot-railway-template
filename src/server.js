@@ -27,9 +27,10 @@ function findWritableStateDir() {
   if (envDir) return envDir;
 
   // Try candidate directories in order of preference
+  // /data is the Railway volume mount - prioritize it for persistent storage
   const candidates = [
-    path.join(os.homedir(), ".openclaw"),
     "/data/.openclaw",
+    path.join(os.homedir(), ".openclaw"),
     path.join(os.tmpdir(), ".openclaw"),
     path.join(process.cwd(), ".openclaw"),
   ];
