@@ -9,6 +9,8 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 - One-click **Export backup** (so users can migrate off Railway later)
 - **Import backup** from `/setup` (advanced recovery)
+- **Security-hardened Dockerfile** (non-root user, Alpine base, pinned version)
+- **Pairing-based DM policy** for secure channel access control
 
 ## How it works (high level)
 
@@ -45,6 +47,34 @@ Then:
 - Visit `https://<your-app>.up.railway.app/setup`
 - Complete setup
 - Visit `https://<your-app>.up.railway.app/` and `/openclaw`
+
+## Pairing workflow (important!)
+
+This deployment uses **pairing-based DM policy** for security. When users message your bot:
+
+1. **User receives a pairing code** - The bot responds with "Pairing required" and a code like `3EY4PUYS`
+2. **Admin approves the code** - Go to `/setup` and use the pairing buttons:
+   - Click **"List pending"** to see all waiting pairing requests
+   - Click **"Approve pairing"** to approve a single user (enter channel + code)
+   - Click **"Approve all"** to batch-approve all pending requests
+3. **User can now chat** - After approval, the user can interact normally
+
+### Fixing "disconnected (1008): pairing required" error
+
+This error means a user tried to connect but hasn't been approved yet. To fix:
+
+1. Go to `https://<your-app>.up.railway.app/setup`
+2. Enter your `SETUP_PASSWORD`
+3. Click **"List pending"** to see the user's pairing code
+4. Click **"Approve pairing"** or **"Approve all"**
+5. Ask the user to try again
+
+### Disabling pairing (not recommended)
+
+If you want open access (anyone can message), edit the config:
+1. Go to `/setup` → Config editor
+2. Change `"dmPolicy": "pairing"` to `"dmPolicy": "open"` for each channel
+3. Click **Save** (this restarts the gateway)
 
 ## Getting chat tokens (so you don’t have to scramble)
 

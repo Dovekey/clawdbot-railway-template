@@ -235,6 +235,50 @@
     };
   }
 
+  // List pending pairing requests
+  var pairingListBtn = document.getElementById('pairingList');
+  if (pairingListBtn) {
+    pairingListBtn.onclick = function () {
+      logEl.textContent += '\nFetching pending pairing requests...\n';
+      httpJson('/setup/api/pairing/pending')
+        .then(function (j) {
+          if (j.pending && j.pending.length > 0) {
+            logEl.textContent += 'Pending pairing requests:\n';
+            for (var i = 0; i < j.pending.length; i++) {
+              var p = j.pending[i];
+              logEl.textContent += '  - ' + (p.channel || p.type) + ': ' + (p.code || p.pairingCode) + '\n';
+            }
+          } else {
+            logEl.textContent += 'No pending pairing requests.\n';
+            if (j.output) logEl.textContent += j.output + '\n';
+          }
+        })
+        .catch(function (e) { logEl.textContent += 'Error: ' + String(e) + '\n'; });
+    };
+  }
+
+  // Approve all pending pairing requests
+  var pairingApproveAllBtn = document.getElementById('pairingApproveAll');
+  if (pairingApproveAllBtn) {
+    pairingApproveAllBtn.onclick = function () {
+      if (!confirm('Approve ALL pending pairing requests? This grants DM access to all pending users.')) return;
+      logEl.textContent += '\nApproving all pending pairing requests...\n';
+      httpJson('/setup/api/pairing/approve-all', { method: 'POST' })
+        .then(function (j) {
+          if (j.approved > 0) {
+            logEl.textContent += 'Approved ' + j.approved + ' pairing request(s).\n';
+            for (var i = 0; i < j.results.length; i++) {
+              var r = j.results[i];
+              logEl.textContent += '  - ' + r.channel + ' (' + r.code + '): ' + (r.ok ? 'OK' : 'FAILED') + '\n';
+            }
+          } else {
+            logEl.textContent += 'No pending pairing requests to approve.\n';
+          }
+        })
+        .catch(function (e) { logEl.textContent += 'Error: ' + String(e) + '\n'; });
+    };
+  }
+
   document.getElementById('reset').onclick = function () {
     if (!confirm('Reset setup? This deletes the config file so onboarding can run again.')) return;
     logEl.textContent = 'Resetting...\n';
