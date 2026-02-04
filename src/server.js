@@ -56,59 +56,141 @@ function expandShellPath(p) {
 }
 
 // Test if a directory is fully usable (can create subdirs, write files)
-function testDirUsable(dir) {
-  fs.mkdirSync(dir, { recursive: true });
+// Returns { ok: boolean, error?: string }
+function testDirUsable(dir, verbose = false) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    if (verbose) console.error(`[wrapper] Cannot create directory ${dir}: ${err.message}`);
+    return { ok: false, error: `Cannot create directory: ${err.message}` };
+  }
+
   // Test write access to the directory itself
   const testFile = path.join(dir, ".write-test");
-  fs.writeFileSync(testFile, "test", { mode: 0o600 });
-  fs.unlinkSync(testFile);
+  try {
+    fs.writeFileSync(testFile, "test", { mode: 0o600 });
+    fs.unlinkSync(testFile);
+  } catch (err) {
+    if (verbose) console.error(`[wrapper] Cannot write to ${dir}: ${err.message}`);
+    return { ok: false, error: `Cannot write file: ${err.message}` };
+  }
+
   // Also test that we can create subdirectories (critical for workspace)
   const testSubdir = path.join(dir, ".subdir-test");
-  fs.mkdirSync(testSubdir, { recursive: true });
-  fs.rmdirSync(testSubdir);
+  try {
+    fs.mkdirSync(testSubdir, { recursive: true });
+    fs.rmdirSync(testSubdir);
+  } catch (err) {
+    if (verbose) console.error(`[wrapper] Cannot create subdirs in ${dir}: ${err.message}`);
+    return { ok: false, error: `Cannot create subdirectory: ${err.message}` };
+  }
+
+  return { ok: true };
+}
+
+// Detailed diagnosis of /data mount point
+function diagnoseDataMount() {
+  const diagnosis = {
+    exists: false,
+    isDirectory: false,
+    writable: false,
+    stats: null,
+    error: null,
+  };
+
+  try {
+    const stats = fs.statSync("/data");
+    diagnosis.exists = true;
+    diagnosis.isDirectory = stats.isDirectory();
+    diagnosis.stats = {
+      uid: stats.uid,
+      gid: stats.gid,
+      mode: (stats.mode & 0o777).toString(8),
+    };
+
+    // Try to write
+    const testResult = testDirUsable("/data/.openclaw", false);
+    diagnosis.writable = testResult.ok;
+    if (!testResult.ok) {
+      diagnosis.error = testResult.error;
+    }
+  } catch (err) {
+    diagnosis.error = err.message;
+  }
+
+  return diagnosis;
 }
 
 function findWritableStateDir() {
+  console.log("[wrapper] ========================================");
+  console.log("[wrapper] Finding writable state directory...");
+  console.log(`[wrapper] Process UID: ${process.getuid?.() ?? "N/A"}, GID: ${process.getgid?.() ?? "N/A"}`);
+  console.log(`[wrapper] HOME: ${os.homedir()}`);
+
+  // Diagnose /data mount point
+  const dataDiagnosis = diagnoseDataMount();
+  console.log(`[wrapper] /data diagnosis:`, JSON.stringify(dataDiagnosis));
+
   // If explicitly set via env, expand shell variables and validate
   const rawEnvDir = process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim();
   if (rawEnvDir) {
     const envDir = expandShellPath(rawEnvDir);
-    // Validate the expanded path is usable before returning
-    try {
-      testDirUsable(envDir);
+    console.log(`[wrapper] Env-specified state dir: ${rawEnvDir} -> ${envDir}`);
+
+    const testResult = testDirUsable(envDir, true);
+    if (testResult.ok) {
+      console.log(`[wrapper] ✓ Using env-specified state dir: ${envDir}`);
+      console.log("[wrapper] ========================================");
       return envDir;
-    } catch {
-      // Env-specified path not usable, fall through to auto-discovery
-      console.warn(`[wrapper] Configured state dir "${rawEnvDir}" (expanded: "${envDir}") is not writable, auto-discovering...`);
     }
+    console.warn(`[wrapper] ✗ Env-specified state dir not usable: ${testResult.error}`);
   }
 
   // Try candidate directories in order of preference
   // /data is the Railway volume mount - prioritize it for persistent storage
   const candidates = [
-    "/data/.openclaw",
-    path.join(os.homedir(), ".openclaw"),
-    path.join(os.tmpdir(), ".openclaw"),
-    path.join(process.cwd(), ".openclaw"),
+    { path: "/data/.openclaw", label: "Railway volume" },
+    { path: path.join(os.homedir(), ".openclaw"), label: "Home directory" },
+    { path: path.join(os.tmpdir(), ".openclaw"), label: "Temp directory (NOT PERSISTENT)" },
+    { path: path.join(process.cwd(), ".openclaw"), label: "Current directory" },
   ];
 
-  for (const dir of candidates) {
-    try {
-      testDirUsable(dir);
-      return dir;
-    } catch {
-      // This location isn't writable, try next
+  for (const candidate of candidates) {
+    console.log(`[wrapper] Trying: ${candidate.path} (${candidate.label})`);
+    const testResult = testDirUsable(candidate.path, true);
+    if (testResult.ok) {
+      console.log(`[wrapper] ✓ Using: ${candidate.path}`);
+
+      // Warn if not using /data
+      if (!candidate.path.startsWith("/data")) {
+        console.warn("[wrapper] ========================================");
+        console.warn("[wrapper] ⚠️  WARNING: NOT USING /data VOLUME!");
+        console.warn("[wrapper] ⚠️  Data will NOT persist across restarts!");
+        console.warn("[wrapper] ⚠️  Add a Railway volume mounted at /data");
+        console.warn("[wrapper] ========================================");
+      }
+
+      console.log("[wrapper] ========================================");
+      return candidate.path;
     }
+    console.log(`[wrapper] ✗ ${candidate.path}: ${testResult.error}`);
   }
 
   // Last resort: use tmpdir directly with a unique subdirectory
   const fallback = path.join(os.tmpdir(), `openclaw-${process.pid}`);
+  console.warn("[wrapper] ========================================");
+  console.warn("[wrapper] ⚠️⚠️⚠️  CRITICAL: USING TEMP FALLBACK ⚠️⚠️⚠️");
+  console.warn(`[wrapper] ⚠️  Path: ${fallback}`);
+  console.warn("[wrapper] ⚠️  ALL DATA WILL BE LOST ON RESTART!");
+  console.warn("[wrapper] ⚠️  This should NEVER happen in production!");
+  console.warn("[wrapper] ========================================");
+
   try {
     fs.mkdirSync(fallback, { recursive: true });
     return fallback;
   } catch {
     // If even tmpdir fails, just return the first candidate and let it fail later with a clear error
-    return candidates[0];
+    return candidates[0].path;
   }
 }
 
@@ -144,6 +226,41 @@ function findWritableWorkspaceDir() {
 }
 
 const WORKSPACE_DIR = findWritableWorkspaceDir();
+
+// Check if data is truly persistent (using /data Railway volume)
+// This helps users understand if their data will survive container restarts
+function checkDataPersistence() {
+  const isPersistent = process.env.OPENCLAW_DATA_PERSISTENT === "true" ||
+    STATE_DIR.startsWith("/data");
+  const isVolumeMounted = fs.existsSync("/data") && STATE_DIR.startsWith("/data");
+  const storageType = STATE_DIR.startsWith("/data")
+    ? "railway-volume"
+    : STATE_DIR.startsWith("/tmp")
+      ? "temporary"
+      : STATE_DIR.includes("/home/")
+        ? "home-directory"
+        : "unknown";
+
+  return {
+    persistent: isPersistent && isVolumeMounted,
+    storageType,
+    stateDir: STATE_DIR,
+    workspaceDir: WORKSPACE_DIR,
+    warning: !isPersistent || !isVolumeMounted
+      ? "Data may not persist across container restarts. Add a Railway volume mounted at /data."
+      : null,
+  };
+}
+
+const DATA_PERSISTENCE = checkDataPersistence();
+
+// Log persistence warning at startup
+if (!DATA_PERSISTENCE.persistent) {
+  console.warn(`[wrapper] ⚠️ WARNING: Data persistence issue detected!`);
+  console.warn(`[wrapper] Storage type: ${DATA_PERSISTENCE.storageType}`);
+  console.warn(`[wrapper] State directory: ${DATA_PERSISTENCE.stateDir}`);
+  console.warn(`[wrapper] ${DATA_PERSISTENCE.warning}`);
+}
 
 // Protect /setup with a user-provided password.
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
@@ -613,6 +730,10 @@ app.get("/health", (_req, res) => {
     ok: true,
     configured: isConfigured(),
     gateway: gatewayProc ? "running" : "stopped",
+    storage: {
+      persistent: DATA_PERSISTENCE.persistent,
+      type: DATA_PERSISTENCE.storageType,
+    },
     timestamp: new Date().toISOString()
   };
   res.json(status);
@@ -621,7 +742,59 @@ app.get("/health", (_req, res) => {
 // === OBSERVABILITY ENDPOINTS ===
 // Detailed health with system metrics
 app.get("/health/detailed", (_req, res) => {
-  res.json(getHealthStatus(isConfigured(), gatewayProc));
+  const health = getHealthStatus(isConfigured(), gatewayProc);
+  health.storage = DATA_PERSISTENCE;
+  res.json(health);
+});
+
+// Storage-specific health check - useful for debugging persistence issues
+app.get("/health/storage", (_req, res) => {
+  const volumeExists = fs.existsSync("/data");
+  let volumeWritable = false;
+  let volumeStats = null;
+
+  if (volumeExists) {
+    try {
+      const testPath = "/data/.write-test-" + Date.now();
+      fs.writeFileSync(testPath, "test");
+      fs.unlinkSync(testPath);
+      volumeWritable = true;
+    } catch {
+      volumeWritable = false;
+    }
+
+    try {
+      const stats = fs.statSync("/data");
+      volumeStats = {
+        uid: stats.uid,
+        gid: stats.gid,
+        mode: stats.mode.toString(8),
+      };
+    } catch {
+      // ignore
+    }
+  }
+
+  const storageStatus = {
+    ...DATA_PERSISTENCE,
+    volume: {
+      path: "/data",
+      exists: volumeExists,
+      writable: volumeWritable,
+      stats: volumeStats,
+    },
+    environment: {
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR || "(not set)",
+      OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR || "(not set)",
+      OPENCLAW_DATA_PERSISTENT: process.env.OPENCLAW_DATA_PERSISTENT || "(not set)",
+      HOME: process.env.HOME || "(not set)",
+    },
+    recommendation: !DATA_PERSISTENCE.persistent
+      ? "Add a Railway volume mounted at /data to enable persistent storage"
+      : "Storage is properly configured for persistence",
+  };
+
+  res.json(storageStatus);
 });
 
 // JSON metrics for dashboards
@@ -1433,9 +1606,11 @@ function buildOnboardArgs(payload) {
 }
 
 function runCmd(cmd, args, opts = {}) {
+  const { timeoutMs, ...spawnOpts } = opts;
+
   return new Promise((resolve) => {
     const proc = childProcess.spawn(cmd, args, {
-      ...opts,
+      ...spawnOpts,
       env: {
         ...process.env,
         OPENCLAW_STATE_DIR: STATE_DIR,
@@ -1447,15 +1622,41 @@ function runCmd(cmd, args, opts = {}) {
     });
 
     let out = "";
+    let timedOut = false;
+    let timeoutId = null;
+
+    // Set up timeout if specified
+    if (timeoutMs && timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        proc.kill("SIGTERM");
+        // Force kill after 5 seconds if SIGTERM doesn't work
+        setTimeout(() => {
+          if (!proc.killed) {
+            proc.kill("SIGKILL");
+          }
+        }, 5000);
+      }, timeoutMs);
+    }
+
     proc.stdout?.on("data", (d) => (out += d.toString("utf8")));
     proc.stderr?.on("data", (d) => (out += d.toString("utf8")));
 
     proc.on("error", (err) => {
+      if (timeoutId) clearTimeout(timeoutId);
       out += `\n[spawn error] ${String(err)}\n`;
       resolve({ code: 127, output: out });
     });
 
-    proc.on("close", (code) => resolve({ code: code ?? 0, output: out }));
+    proc.on("close", (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (timedOut) {
+        out += `\n[timeout] Command timed out after ${timeoutMs}ms\n`;
+        resolve({ code: 124, output: out }); // 124 is standard timeout exit code
+      } else {
+        resolve({ code: code ?? 0, output: out });
+      }
+    });
   });
 }
 
@@ -1908,21 +2109,30 @@ app.post("/setup/api/chat", requireSetupAuth, async (req, res) => {
     }
 
     // Run the agent command with the message
+    // Note: openclaw agent doesn't support --no-stream, so we just capture the output
     const result = await runCmd(
       OPENCLAW_NODE,
-      clawArgs(["agent", "--message", sanitizedMessage, "--no-stream"]),
+      clawArgs(["agent", "--message", sanitizedMessage]),
       { timeoutMs: 120000 } // 2 minute timeout for AI responses
     );
 
     if (result.code !== 0) {
+      // Check for specific errors
+      const output = result.output || "";
+
+      // Handle unknown option errors gracefully
+      if (output.includes("unknown option")) {
+        logger.warn("CLI compatibility issue", { output: output.slice(0, 200) });
+      }
+
       logger.error("Chat command failed", {
         code: result.code,
-        output: result.output?.slice(0, 500),
+        output: output.slice(0, 500),
       });
       return res.status(500).json({
         ok: false,
         error: "Failed to get response from OpenClaw",
-        details: result.output?.slice(0, 200),
+        details: output.slice(0, 200),
       });
     }
 
@@ -2490,7 +2700,23 @@ const server = app.listen(PORT, "0.0.0.0", () => {
     gatewayTarget: GATEWAY_TARGET,
     configured: isConfigured(),
     setupPasswordSet: Boolean(SETUP_PASSWORD),
+    storage: DATA_PERSISTENCE,
   });
+
+  // Log storage persistence status prominently
+  if (!DATA_PERSISTENCE.persistent) {
+    logger.warn("DATA PERSISTENCE WARNING", {
+      message: "Data may not persist across container restarts!",
+      storageType: DATA_PERSISTENCE.storageType,
+      stateDir: DATA_PERSISTENCE.stateDir,
+      recommendation: DATA_PERSISTENCE.warning,
+    });
+  } else {
+    logger.info("Storage configured for persistence", {
+      storageType: DATA_PERSISTENCE.storageType,
+      stateDir: DATA_PERSISTENCE.stateDir,
+    });
+  }
 
   if (!SETUP_PASSWORD) {
     logger.warn("SETUP_PASSWORD is not set; /setup will error");
@@ -2501,6 +2727,7 @@ const server = app.listen(PORT, "0.0.0.0", () => {
     endpoints: [
       "/health",
       "/health/detailed",
+      "/health/storage",
       "/metrics",
       "/metrics/prometheus",
       "/diagnostics",
