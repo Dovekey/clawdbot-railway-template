@@ -8,6 +8,23 @@ import express from "express";
 import httpProxy from "http-proxy";
 import * as tar from "tar";
 
+// Observability module for structured logging, tracing, and metrics
+import {
+  logger,
+  requestTracer,
+  trackError,
+  trackGatewayStart,
+  trackGatewayRestart,
+  trackGatewayCrash,
+  getHealthStatus,
+  getMetricsJson,
+  getMetricsPrometheus,
+  generateDiagnosticReport,
+  metricsRouter,
+  logStartupBanner,
+  cloudflareContext,
+} from "./observability.js";
+
 // Railway deployments sometimes inject PORT=3000 by default. We want the wrapper to
 // reliably listen on 8080 unless explicitly overridden.
 //
@@ -357,13 +374,21 @@ async function startGateway() {
     },
   });
 
+  // Track gateway start
+  trackGatewayStart();
+
   gatewayProc.on("error", (err) => {
-    console.error(`[gateway] spawn error: ${String(err)}`);
+    logger.error("Gateway spawn error", { error: err.message, code: err.code });
+    trackError(err, { context: "gateway_spawn" });
     gatewayProc = null;
   });
 
   gatewayProc.on("exit", (code, signal) => {
-    console.error(`[gateway] exited code=${code} signal=${signal}`);
+    // Track as crash if exit was unexpected (non-zero code or signal)
+    if (code !== 0 || signal) {
+      trackGatewayCrash(code, signal);
+    }
+    logger.warn("Gateway exited", { exitCode: code, signal });
     gatewayProc = null;
   });
 }
@@ -396,6 +421,7 @@ async function restartGateway() {
     // Give it a moment to exit and release the port.
     await sleep(750);
     gatewayProc = null;
+    trackGatewayRestart();
   }
   return ensureGatewayRunning();
 }
@@ -577,6 +603,10 @@ setInterval(() => {
 
 app.use(express.json({ limit: "1mb" }));
 
+// === REQUEST TRACING MIDDLEWARE ===
+// Add tracing context and Cloudflare integration for all requests
+app.use(requestTracer());
+
 // Health endpoint for Railway (primary)
 app.get("/health", (_req, res) => {
   const status = {
@@ -586,6 +616,33 @@ app.get("/health", (_req, res) => {
     timestamp: new Date().toISOString()
   };
   res.json(status);
+});
+
+// === OBSERVABILITY ENDPOINTS ===
+// Detailed health with system metrics
+app.get("/health/detailed", (_req, res) => {
+  res.json(getHealthStatus(isConfigured(), gatewayProc));
+});
+
+// JSON metrics for dashboards
+app.get("/metrics", (_req, res) => {
+  res.json(getMetricsJson());
+});
+
+// Prometheus-compatible metrics
+app.get("/metrics/prometheus", (_req, res) => {
+  res.type("text/plain").send(getMetricsPrometheus());
+});
+
+// Full diagnostic report
+app.get("/diagnostics", async (_req, res) => {
+  const report = await generateDiagnosticReport({
+    isConfigured: isConfigured(),
+    gatewayProc,
+    stateDir: STATE_DIR,
+    workspaceDir: WORKSPACE_DIR,
+  });
+  res.json(report);
 });
 
 // Legacy health endpoint for backward compatibility
@@ -2182,8 +2239,15 @@ const proxy = httpProxy.createProxyServer({
   xfwd: true,
 });
 
-proxy.on("error", (err, _req, _res) => {
-  console.error("[proxy]", err);
+proxy.on("error", (err, req, _res) => {
+  logger.error("Proxy error", {
+    error: err.message,
+    code: err.code,
+    path: req?.url,
+    method: req?.method,
+    traceId: req?.trace?.traceId,
+  });
+  trackError(err, { context: "proxy", path: req?.url });
 });
 
 app.use(async (req, res) => {
@@ -2204,14 +2268,37 @@ app.use(async (req, res) => {
 });
 
 const server = app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[wrapper] listening on :${PORT}`);
-  console.log(`[wrapper] state dir: ${STATE_DIR}`);
-  console.log(`[wrapper] workspace dir: ${WORKSPACE_DIR}`);
-  console.log(`[wrapper] gateway token: ${OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)"}`);
-  console.log(`[wrapper] gateway target: ${GATEWAY_TARGET}`);
+  // Use structured logging for startup
+  logStartupBanner({
+    port: PORT,
+    stateDir: STATE_DIR,
+    workspaceDir: WORKSPACE_DIR,
+  });
+
+  logger.info("Server configuration", {
+    port: PORT,
+    stateDir: STATE_DIR,
+    workspaceDir: WORKSPACE_DIR,
+    gatewayToken: OPENCLAW_GATEWAY_TOKEN ? "(set)" : "(missing)",
+    gatewayTarget: GATEWAY_TARGET,
+    configured: isConfigured(),
+    setupPasswordSet: Boolean(SETUP_PASSWORD),
+  });
+
   if (!SETUP_PASSWORD) {
-    console.warn("[wrapper] WARNING: SETUP_PASSWORD is not set; /setup will error.");
+    logger.warn("SETUP_PASSWORD is not set; /setup will error");
   }
+
+  // Log observability endpoints
+  logger.info("Observability endpoints available", {
+    endpoints: [
+      "/health",
+      "/health/detailed",
+      "/metrics",
+      "/metrics/prometheus",
+      "/diagnostics",
+    ],
+  });
   // Don't start gateway unless configured; proxy will ensure it starts.
 });
 
@@ -2230,11 +2317,13 @@ server.on("upgrade", async (req, socket, head) => {
 });
 
 process.on("SIGTERM", () => {
+  logger.info("Received SIGTERM, shutting down gracefully");
   // Best-effort shutdown
   try {
     if (gatewayProc) gatewayProc.kill("SIGTERM");
   } catch {
     // ignore
   }
+  logger.info("Shutdown complete");
   process.exit(0);
 });
