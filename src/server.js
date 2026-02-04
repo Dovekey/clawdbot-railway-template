@@ -1972,10 +1972,10 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
       return res.json({ ok: true, output: "Already configured.\nUse Reset setup if you want to rerun onboarding.\n" });
     }
 
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+    // Use fallback logic in case /data volume isn't writable
+    ensureDirectoriesWithFallback();
 
-  const payload = req.body || {};
+    const payload = req.body || {};
   const onboardArgs = buildOnboardArgs(payload);
   const onboard = await runCmd(OPENCLAW_NODE, clawArgs(onboardArgs));
 
@@ -3250,7 +3250,8 @@ app.post("/setup/api/config/raw", requireSetupAuth, async (req, res) => {
 
     auditLog("CONFIG_SAVE", { ip, size: content.length });
 
-    fs.mkdirSync(STATE_DIR, { recursive: true });
+    // Ensure directories exist with fallback for permission errors
+    ensureDirectoriesWithFallback();
 
     const p = configPath();
     // Backup
@@ -3420,8 +3421,8 @@ app.get("/setup/export", requireSetupAuth, async (req, res) => {
   const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
   auditLog("BACKUP_EXPORT", { ip });
 
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+  // Ensure directories exist with fallback for permission errors
+  ensureDirectoriesWithFallback();
 
   res.setHeader("content-type", "application/gzip");
   res.setHeader(
