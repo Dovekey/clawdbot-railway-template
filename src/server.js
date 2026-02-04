@@ -38,6 +38,19 @@ function expandShellPath(p) {
   return p;
 }
 
+// Test if a directory is fully usable (can create subdirs, write files)
+function testDirUsable(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  // Test write access to the directory itself
+  const testFile = path.join(dir, ".write-test");
+  fs.writeFileSync(testFile, "test", { mode: 0o600 });
+  fs.unlinkSync(testFile);
+  // Also test that we can create subdirectories (critical for workspace)
+  const testSubdir = path.join(dir, ".subdir-test");
+  fs.mkdirSync(testSubdir, { recursive: true });
+  fs.rmdirSync(testSubdir);
+}
+
 function findWritableStateDir() {
   // If explicitly set via env, expand shell variables and validate
   const rawEnvDir = process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim();
@@ -45,10 +58,7 @@ function findWritableStateDir() {
     const envDir = expandShellPath(rawEnvDir);
     // Validate the expanded path is usable before returning
     try {
-      fs.mkdirSync(envDir, { recursive: true });
-      const testFile = path.join(envDir, ".write-test");
-      fs.writeFileSync(testFile, "test", { mode: 0o600 });
-      fs.unlinkSync(testFile);
+      testDirUsable(envDir);
       return envDir;
     } catch {
       // Env-specified path not usable, fall through to auto-discovery
@@ -67,11 +77,7 @@ function findWritableStateDir() {
 
   for (const dir of candidates) {
     try {
-      fs.mkdirSync(dir, { recursive: true });
-      // Test write access
-      const testFile = path.join(dir, ".write-test");
-      fs.writeFileSync(testFile, "test", { mode: 0o600 });
-      fs.unlinkSync(testFile);
+      testDirUsable(dir);
       return dir;
     } catch {
       // This location isn't writable, try next
@@ -91,10 +97,36 @@ function findWritableStateDir() {
 
 const STATE_DIR = findWritableStateDir();
 
-const WORKSPACE_DIR = expandShellPath(
-  process.env.OPENCLAW_WORKSPACE_DIR?.trim() ||
-  process.env.CLAWDBOT_WORKSPACE_DIR?.trim()
-) || path.join(STATE_DIR, "workspace");
+function findWritableWorkspaceDir() {
+  // If explicitly set via env, expand and validate
+  const rawEnvDir = process.env.OPENCLAW_WORKSPACE_DIR?.trim() || process.env.CLAWDBOT_WORKSPACE_DIR?.trim();
+  if (rawEnvDir) {
+    const envDir = expandShellPath(rawEnvDir);
+    try {
+      testDirUsable(envDir);
+      return envDir;
+    } catch {
+      console.warn(`[wrapper] Configured workspace dir "${rawEnvDir}" (expanded: "${envDir}") is not writable, using default...`);
+    }
+  }
+  // Default: under the state directory
+  const defaultDir = path.join(STATE_DIR, "workspace");
+  try {
+    testDirUsable(defaultDir);
+    return defaultDir;
+  } catch {
+    // If even default fails, try tmpdir
+    const fallback = path.join(os.tmpdir(), `openclaw-workspace-${process.pid}`);
+    try {
+      fs.mkdirSync(fallback, { recursive: true });
+      return fallback;
+    } catch {
+      return defaultDir; // Let it fail with clear error later
+    }
+  }
+}
+
+const WORKSPACE_DIR = findWritableWorkspaceDir();
 
 // Protect /setup with a user-provided password.
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD?.trim();
