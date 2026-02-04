@@ -26,7 +26,7 @@ check_writable() {
     fi
 }
 
-# Function to setup directories
+# Function to setup directories (tests file writes AND subdirectory creation)
 setup_directories() {
     state_dir="$1"
     workspace_dir="$2"
@@ -34,8 +34,14 @@ setup_directories() {
     mkdir -p "$state_dir" 2>/dev/null || return 1
     mkdir -p "$workspace_dir" 2>/dev/null || return 1
 
-    # Verify we can write to them
+    # Verify we can write files to state dir
     touch "$state_dir/.write-test" 2>/dev/null && rm -f "$state_dir/.write-test" || return 1
+
+    # Verify we can write files to workspace dir
+    touch "$workspace_dir/.write-test" 2>/dev/null && rm -f "$workspace_dir/.write-test" || return 1
+
+    # Verify we can create subdirectories (critical for workspace operations)
+    mkdir -p "$state_dir/.subdir-test" 2>/dev/null && rmdir "$state_dir/.subdir-test" || return 1
 
     return 0
 }
